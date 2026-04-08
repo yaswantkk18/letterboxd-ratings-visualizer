@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Letterboxd Ratings</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 20px; padding: 40px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        h1 { text-align: center; color: #2d3748; margin-bottom: 40px; font-size: 2.5em; text-shadow: 2px 2px 4px rgba(0,0,0,0.1); }
+        .file-upload { text-align: center; padding: 40px; background: #f7fafc; border: 3px dashed #cbd5e0; border-radius: 15px; margin-bottom: 30px; cursor: pointer; transition: all 0.3s ease; }
+        .file-upload:hover { border-color: #667eea; background: #edf2f7; }
+        .file-upload.active { display: none; }
+        .file-upload-icon { font-size: 3em; margin-bottom: 15px; }
+        .file-upload-text { color: #4a5568; font-size: 1.1em; }
+        #fileInput { display: none; }
+        .rating-section { margin-bottom: 50px; border-bottom: 3px solid #e2e8f0; padding-bottom: 30px; }
+        .rating-section:last-child { border-bottom: none; }
+        .rating-header { display: flex; align-items: center; margin-bottom: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px 25px; border-radius: 10px; color: white; }
+        .rating-value { font-size: 2em; font-weight: bold; margin-right: 10px; }
+        .stars { color: #ffd700; font-size: 1.5em; margin-right: 15px; }
+        .movie-count { margin-left: auto; background: rgba(255,255,255,0.2); padding: 5px 15px; border-radius: 20px; font-size: 0.9em; }
+        .movies-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 15px; padding: 20px 0; }
+        .movie-card { position: relative; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.2); transition: transform 0.3s ease, box-shadow 0.3s ease; cursor: pointer; background: #f7fafc; }
+        .movie-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+        .movie-poster { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block; }
+        .no-poster { width: 100%; aspect-ratio: 2/3; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 3em; }
+        .loading-poster { width: 100%; aspect-ratio: 2/3; background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+        @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .loading-message { text-align: center; padding: 40px; color: #718096; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 My Letterboxd Ratings 🎬</h1>
+        
+        <div class="file-upload" id="fileUploadZone" onclick="document.getElementById('fileInput').click()">
+            <div class="file-upload-icon">📁</div>
+            <div class="file-upload-text"><strong>Click to select your ratings.csv file</strong><br><small>or drag and drop it here</small></div>
+        </div>
+        
+        <input type="file" id="fileInput" accept=".csv" />
+        <div id="content"></div>
+    </div>
+    
+    <script>
+        const TMDB_API_KEY = 'YOUR_TMDB_API_KEY_HERE';
+        const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+        const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+        const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+        const posterCache = JSON.parse(localStorage.getItem('posterCache') || '{}');
+        
+        function getStars(r) { 
+            const f = Math.floor(parseFloat(r)); 
+            const h = parseFloat(r) % 1 !== 0; 
+            let s = '★'.repeat(f); 
+            if (h) s += '½'; 
+            return s; 
+        }
+        
+        async function getTMDBIdFromLetterboxd(url) {
+            try {
+                const response = await fetch(CORS_PROXY + encodeURIComponent(url));
+                const html = await response.text();
+                const patterns = [/themoviedb\.org\/movie\/(\d+)/, /data-tmdb-id="(\d+)"/, /tmdb\.org\/movie\/(\d+)/];
+                for (const pattern of patterns) {
+                    const match = html.match(pattern);
+                    if (match && match[1]) return match[1];
+                }
+            } catch (error) {
+                console.error('Error fetching TMDB ID:', error);
+            }
+            return null;
+        }
+        
+        async function getPosterByTMDBId(tmdbId) {
+            if (TMDB_API_KEY === 'YOUR_TMDB_API_KEY_HERE') return null;
+            try {
+                const response = await fetch(`${TMDB_BASE_URL}/movie/${tmdbId}?api_key=${TMDB_API_KEY}`);
+                const data = await response.json();
+                if (data.poster_path) {
+                    return `${TMDB_IMAGE_BASE}${data.poster_path}`;
+                }
+            } catch (error) {
+                console.error('Error fetching poster:', error);
+            }
+            return null;
+        }
+        
+        async function searchMovie(title, year) {
+            if (TMDB_API_KEY === 'YOUR_TMDB_API_KEY_HERE') return null;
+            try {
+                const response = await fetch(`${TMDB_BASE_URL}/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(title)}&year=${year}`);
+                const data = await response.json();
+                if (data.results && data.results.length > 0) {
+                    return data.results[0].poster_path ? `${TMDB_IMAGE_BASE}${data.results[0].poster_path}` : null;
+                }
+            } catch (error) {
+                console.error('Error searching movie:', error);
+            }
+            return null;
+        }
+        
+        async function getMoviePoster(movie) {
+            if (posterCache[movie.letterboxdUri]) {
+                return posterCache[movie.letterboxdUri];
+            }
+            
+            const tmdbId = await getTMDBIdFromLetterboxd(movie.letterboxdUri);
+            let posterUrl = null;
+            
+            if (tmdbId) {
+                posterUrl = await getPosterByTMDBId(tmdbId);
+            }
+            
+            if (!posterUrl) {
+                posterUrl = await searchMovie(movie.name, movie.year);
+            }
+            
+            if (posterUrl) {
+                posterCache[movie.letterboxdUri] = posterUrl;
+                localStorage.setItem('posterCache', JSON.stringify(posterCache));
+            }
+            
+            return posterUrl;
+        }
+        
+        function parseCSV(text) {
+            const lines = text.split('\n');
+            const moviesData = {};
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const values = line.split(',');
+                if (values.length < 5) continue;
+                const rating = values[4].trim();
+                const name = values[1].trim();
+                const year = values[2].trim();
+                const letterboxdUri = values[3].trim();
+                if (!moviesData[rating]) moviesData[rating] = [];
+                moviesData[rating].push({ name, year, letterboxdUri });
+            }
+            return moviesData;
+        }
+        
+        async function renderMovies(moviesData) {
+            const content = document.getElementById('content');
+            content.innerHTML = '';
+            const sortedRatings = Object.entries(moviesData).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
+            
+            for (const [rating, movies] of sortedRatings) {
+                const section = document.createElement('div');
+                section.className = 'rating-section';
+                section.innerHTML = `<div class="rating-header"><div class="rating-value">${rating}</div><div class="stars">${getStars(rating)}</div><div class="movie-count">${movies.length} movie${movies.length !== 1 ? 's' : ''}</div></div><div class="movies-grid" id="grid-${rating}"></div>`;
+                content.appendChild(section);
+                
+                const grid = document.getElementById(`grid-${rating}`);
+                movies.forEach((movie, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'movie-card';
+                    card.id = `card-${rating}-${index}`;
+                    card.innerHTML = `<div class="loading-poster"></div>`;
+                    card.title = `${movie.name} (${movie.year})`;
+                    grid.appendChild(card);
+                });
+            }
+            
+            const batchSize = 10;
+            for (const [rating, movies] of sortedRatings) {
+                for (let i = 0; i < movies.length; i += batchSize) {
+                    const batch = movies.slice(i, i + batchSize);
+                    await Promise.all(batch.map(async (movie, batchIndex) => {
+                        const index = i + batchIndex;
+                        const card = document.getElementById(`card-${rating}-${index}`);
+                        if (!card) return;
+                        
+                        const posterUrl = await getMoviePoster(movie);
+                        
+                        if (posterUrl) {
+                            card.innerHTML = `<img src="${posterUrl}" alt="${movie.name}" class="movie-poster" loading="lazy" title="${movie.name} (${movie.year})">`;
+                        } else {
+                            card.innerHTML = `<div class="no-poster" title="${movie.name} (${movie.year})">🎬</div>`;
+                        }
+                    }));
+                }
+            }
+        }
+        
+        async function renderWithoutPosters(moviesData) {
+            const content = document.getElementById('content');
+            content.innerHTML = '';
+            const sortedRatings = Object.entries(moviesData).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
+            
+            for (const [rating, movies] of sortedRatings) {
+                const section = document.createElement('div');
+                section.className = 'rating-section';
+                section.innerHTML = `<div class="rating-header"><div class="rating-value">${rating}</div><div class="stars">${getStars(rating)}</div><div class="movie-count">${movies.length} movie${movies.length !== 1 ? 's' : ''}</div></div><div class="movies-grid" id="grid-${rating}"></div>`;
+                content.appendChild(section);
+                
+                const grid = document.getElementById(`grid-${rating}`);
+                for (const movie of movies) {
+                    const card = document.createElement('div');
+                    card.className = 'movie-card';
+                    card.innerHTML = `<div class="no-poster" title="${movie.name} (${movie.year})">🎬</div>`;
+                    grid.appendChild(card);
+                }
+            }
+        }
+        
+        async function handleFile(file) {
+            if (!file) return;
+            document.getElementById('fileUploadZone').classList.add('active');
+            document.getElementById('content').innerHTML = '<div class="loading-message">Loading your ratings...</div>';
+            
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const text = e.target.result;
+                const moviesData = parseCSV(text);
+                
+                if (TMDB_API_KEY === 'YOUR_TMDB_API_KEY_HERE') {
+                    document.getElementById('content').innerHTML = `<div style="text-align: center; padding: 40px; background: #fff3cd; border-radius: 10px;"><h2 style="color: #856404;">⚠️ TMDB API Key Required</h2><p style="color: #856404; margin: 15px 0;">Get your free API key from <a href="https://www.themoviedb.org/signup" target="_blank" style="color: #0066cc;">themoviedb.org</a></p><p style="color: #856404;">Then replace 'YOUR_TMDB_API_KEY_HERE' in this file with your key.</p></div>`;
+                    await renderWithoutPosters(moviesData);
+                } else {
+                    await renderMovies(moviesData);
+                }
+            };
+            reader.readAsText(file);
+        }
+        
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            handleFile(e.target.files[0]);
+        });
+        
+        const uploadZone = document.getElementById('fileUploadZone');
+        uploadZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#667eea';
+            this.style.background = '#edf2f7';
+        });
+        uploadZone.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#cbd5e0';
+            this.style.background = '#f7fafc';
+        });
+        uploadZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#cbd5e0';
+            this.style.background = '#f7fafc';
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.csv')) {
+                handleFile(file);
+            }
+        });
+    </script>
+</body>
+</html>
